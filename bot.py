@@ -14,39 +14,28 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
 # -------------------- CONFIGURATION --------------------
 
-def env_required(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise RuntimeError(
-            f"Missing Render Environment Variable: {name}. "
-            "Add it in Render Dashboard -> Environment."
-        )
-    return value
-
-
-API_ID = int(env_required("35327931"))
-API_HASH = env_required("5f3faae927a7c7490a5d986f6f75f35b")
-BOT_TOKEN = env_required("8777786687:AAGXRR5WUDpjyVhYghN1-Qr0PWomIqAkhKk")
-ADMIN_ID = int(env_required("8144348712"))
-DB_CHANNEL_ID = int(env_required("-1004455628529"))
+API_ID = 35327931
+API_HASH = "5f3faae927a7c7490a5d986f6f75f35b"
+BOT_TOKEN = "8777786687:AAGXRR5WUDpjyVhYghN1-Qr0PWomIqAkhKk"
+ADMIN_ID = 8144348712
+DB_CHANNEL_ID = -1004455628529
 
 REQUIRED_CHANNELS = [
-    item.strip().lstrip("@")
-    for item in os.getenv(
-        "REQUIRED_CHANNELS",
-        "blackbathacker001,bathackermodzzz,batsvvippanelll,"
-        "blackbatlightbomberrr,batanimationvideos,blackbathackergroup",
-    ).split(",")
-    if item.strip()
+    "blackbathacker001",
+    "bathackermodzzz",
+    "batsvvippanelll",
+    "blackbatlightbomberrr",
+    "batanimationvideos",
+    "blackbathackergroup"
 ]
 
 IST = pytz.timezone("Asia/Kolkata")
-DATA_DIR = Path(os.getenv("DATA_DIR", ".")).resolve()
+DATA_DIR = Path(".").resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "jobs.sqlite"
 
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level="INFO",
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 log = logging.getLogger("black_bat_auto_post")
@@ -576,7 +565,6 @@ async def main():
                     "Required channel @%s is not accessible to the bot.", channel
                 )
 
-        # Keep the process alive while Telegram polling and scheduler run.
         await asyncio.Event().wait()
     finally:
         if scheduler.running:
