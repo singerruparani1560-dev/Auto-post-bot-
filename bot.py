@@ -22,11 +22,11 @@ def env_required(name):
     return value
 
 
-API_ID = int(env_required("API_ID"))
-API_HASH = env_required("API_HASH")
-BOT_TOKEN = env_required("BOT_TOKEN")
-ADMIN_ID = int(env_required("ADMIN_ID"))
-DB_CHANNEL_ID = int(env_required("DB_CHANNEL_ID"))
+API_ID = int(env_required("35327931"))
+API_HASH = env_required("5f3faae927a7c7490a5d986f6f75f35b")
+BOT_TOKEN = env_required("8777786687:AAGXRR5WUDpjyVhYghN1-Qr0PWomIqAkhKk")
+ADMIN_ID = int(env_required("8144348712"))
+DB_CHANNEL_ID = int(env_required("-1004455628529"))
 
 REQUIRED_CHANNELS = [
     x.strip().lstrip("@") for x in os.getenv(
