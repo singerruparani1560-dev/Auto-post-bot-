@@ -1,6 +1,5 @@
-# Black Bat Auto Post Bot
-# Recommended Python version: 3.12
-
+# Requirements for Black Bat Auto Post & Bulk Queue Scheduler Bot
+# Recommended Render runtime: Python 3.12
 Pyrogram==2.0.106
 TgCrypto==1.2.5
 APScheduler==3.11.3
