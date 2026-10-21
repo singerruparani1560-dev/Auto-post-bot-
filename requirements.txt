@@ -1,10 +1,5 @@
-pyromod==2.0.7
-pyromod
+pyrogram
 tgcrypto
 apscheduler
 sqlalchemy
 pytz
-motor
-aiofiles
-aiohttp
-
