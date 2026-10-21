@@ -1,5 +1,9 @@
 pyrogram
+pyromod
 tgcrypto
 apscheduler
 sqlalchemy
 pytz
+motor
+aiofiles
+aiohttp
