@@ -1,72 +1,99 @@
 import asyncio
+import os
+from datetime import datetime, timedelta
+from pathlib import Path
+
+# Pyrogram 2.x calls asyncio.get_event_loop() while importing.
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 import pytz
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import UserNotParticipant, ChannelInvalid, ChannelPrivate
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from datetime import datetime, timedelta
 
-# Telegram API & Bot Configuration
-API_ID = 35327931
-API_HASH = "5f3faae927a7c7490a5d986f6f75f35b"
-BOT_TOKEN = "8777786687:AAGXRR5WUDpjyVhYghN1-Qr0PWomIqAkhKk"
 
-ADMIN_ID = 8144348712
-DB_CHANNEL_ID = -1004455628529
+def env_required(name):
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Set the {name} environment variable in Render.")
+    return value
+
+
+API_ID = int(env_required("API_ID"))
+API_HASH = env_required("API_HASH")
+BOT_TOKEN = env_required("BOT_TOKEN")
+ADMIN_ID = int(env_required("ADMIN_ID"))
+DB_CHANNEL_ID = int(env_required("DB_CHANNEL_ID"))
 
 REQUIRED_CHANNELS = [
-    "blackbathacker001",
-    "bathackermodzzz",
-    "batsvvippanelll",
-    "blackbatlightbomberrr",
-    "batanimationvideos",
-    "blackbathackergroup"
+    x.strip().lstrip("@") for x in os.getenv(
+        "REQUIRED_CHANNELS",
+        "blackbathacker001,bathackermodzzz,batsvvippanelll,"
+        "blackbatlightbomberrr,batanimationvideos,blackbathackergroup"
+    ).split(",") if x.strip()
 ]
-
 IST = pytz.timezone("Asia/Kolkata")
+DATA_DIR = Path(os.getenv("DATA_DIR", ".")).resolve()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# SQLite Database for 24/7 Permanent Job Storage
-jobstores = {
-    'default': SQLAlchemyJobStore(url='sqlite:///jobs.sqlite')
-}
+app = Client(
+    "clone_post_bot", api_id=API_ID, api_hash=API_HASH,
+    bot_token=BOT_TOKEN, workdir=str(DATA_DIR)
+)
+scheduler = AsyncIOScheduler(
+    jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{DATA_DIR / 'jobs.sqlite'}")},
+    timezone=IST,
+)
+BULK = {}
 
-app = Client("clone_post_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-scheduler = AsyncIOScheduler(jobstores=jobstores, timezone=IST)
 
-USER_BULK_SESSION = {}
+def parse_time(date_text, time_text):
+    return IST.localize(datetime.strptime(f"{date_text} {time_text}", "%Y-%m-%d %H:%M"))
 
-# Check User Joined Required Channels (Owner Auto-Bypass)
+
+def fmt_time(dt):
+    return dt.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+
+def check_future(dt):
+    if dt <= datetime.now(IST):
+        raise ValueError("Time must be in the future (India/IST).")
+
+
 async def check_user_joined(client, user_id):
     if user_id == ADMIN_ID:
         return True
-    for ch in REQUIRED_CHANNELS:
+    for channel in REQUIRED_CHANNELS:
         try:
-            member = await client.get_chat_member(f"@{ch}", user_id)
-            if member.status in ["kicked", "banned"]:
+            member = await client.get_chat_member(f"@{channel}", user_id)
+            status = str(member.status).lower()
+            if status.endswith("kicked") or status.endswith("banned"):
                 return False
         except UserNotParticipant:
             return False
-        except (ChannelInvalid, ChannelPrivate):
-            continue
-        except Exception as e:
-            print(f"Verification Check Error for @{ch}: {e}")
-            continue
+        except (ChannelInvalid, ChannelPrivate) as exc:
+            print(f"Cannot verify @{channel}: {exc}")
+            return False
+        except Exception as exc:
+            print(f"Membership check failed for @{channel}: {exc}")
+            return False
     return True
 
-# Save/Copy Message Safely to Private Database
-async def safe_copy_to_db(message):
-    try:
-        msg = await message.copy(DB_CHANNEL_ID)
-        return msg.id
-    except Exception as e:
-        print(f"DB Copy Error: {e}")
-        msg = await message.forward(DB_CHANNEL_ID)
-        return msg.id
 
-# Force Join Keyboard Layout
-def get_join_keyboard():
-    buttons = [
+async def save_post(message):
+    try:
+        copied = await message.copy(DB_CHANNEL_ID)
+    except Exception as exc:
+        print(f"Copy failed; trying forward: {exc}")
+        copied = await message.forward(DB_CHANNEL_ID)
+    return copied.id
+
+
+def join_keyboard():
+    rows = [
         [InlineKeyboardButton("💀 HACKING CHANNEL", url="https://t.me/blackbathacker001")],
         [InlineKeyboardButton("😎 MODSZ CHANNEL", url="https://t.me/bathackermodzzz")],
         [InlineKeyboardButton("💀 VIP PANEL", url="https://t.me/batsvvippanelll")],
@@ -74,353 +101,332 @@ def get_join_keyboard():
         [InlineKeyboardButton("💀 ANIMATION VIDEOS", url="https://t.me/batanimationvideos")],
         [InlineKeyboardButton("🛡️ BACKUP / SUPPORT", url="https://t.me/blackbathackergroup")],
         [InlineKeyboardButton("✅ Verify / सत्यापन करें", callback_data="verify_joined")],
-        [
-            InlineKeyboardButton("👑 OWNER", url="https://t.me/blackbatowner"),
-            InlineKeyboardButton("🫵 MY BEST FRIEND", url="tg://settings")
-        ]
+        [InlineKeyboardButton("👑 OWNER", url="https://t.me/blackbatowner")],
     ]
-    return InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup(rows)
 
-# Main Menu Keyboard Layout
-def get_main_keyboard():
-    buttons = [
+
+def main_keyboard():
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📢 Main Channel", url="https://t.me/blackbathacker001"),
-            InlineKeyboardButton("💬 Support Group", url="https://t.me/blackbathackergroup")
+            InlineKeyboardButton("💬 Support Group", url="https://t.me/blackbathackergroup"),
         ],
         [
             InlineKeyboardButton("🌀 Clone This Bot", callback_data="clone_info"),
-            InlineKeyboardButton("👑 Owner", url="https://t.me/blackbatowner")
-        ]
-    ]
-    return InlineKeyboardMarkup(buttons)
+            InlineKeyboardButton("👑 Owner", url="https://t.me/blackbatowner"),
+        ],
+    ])
 
-# /start Command Handler
+
+def welcome(name):
+    return (
+        f"👋 **Welcome {name}!**\n\n"
+        "🤖 **Black Bat Auto Post & Bulk Queue Scheduler Bot**\n\n"
+        "**Admin commands:**\n"
+        "• `/schedule @channel YYYY-MM-DD HH:MM` (reply to post)\n"
+        "• `/interval @channel YYYY-MM-DD HH:MM Count GapDays` (reply to post)\n"
+        "• `/multiinterval YYYY-MM-DD HH:MM Count` (reply to post; all channels, 2-day gap)\n"
+        "• `/postnow` (reply to post; publish to all channels)\n"
+        "• `/bulk_schedule YYYY-MM-DD HH:MM GapDays @channel1 @channel2` then send posts\n"
+        "• `/done_bulk`, `/list`, `/cancel job_ID`, `/reschedule job_ID YYYY-MM-DD HH:MM`"
+    )
+
+
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
-    user_id = message.from_user.id
-    is_joined = await check_user_joined(client, user_id)
-    
-    if not is_joined:
-        text = (
-            "⚔️ **B.A.T HACKER NETWORK** ⚔️\n\n"
-            "🍿 **HELLO GUYS** 🍿\n\n"
-            "───────────────\n"
-            "🇮🇳 **HINGLISH:**\n"
-            "⚠️ **Access Denied!** Bot ko start karne ke liye pehle niche diye gaye **sabhi 6 channels ko join karna compulsory hai.** Join karne ke baad **'✅ Verify'** button par click karein.\n\n"
-            "🇮🇳 **HINDI:**\n"
-            "⚠️ **एक्सेस अस्वीकृत!** बोट को शुरू करने के लिए नीचे दिए गए **सभी 6 चैनलों को ज्वाइन करना अनिवार्य है।** ज्वाइन करने के बाद **'✅ Verify'** बटन पर क्लिक करें。\n\n"
-            "🇬🇧 **ENGLISH:**\n"
-            "⚠️ **Access Denied!** To start using this bot, you must **join all 6 channels listed below.** After joining, click on the **'✅ Verify'** button.\n"
-            "───────────────"
-        )
-        await message.reply_text(text, reply_markup=get_join_keyboard(), disable_web_page_preview=True)
+    if not message.from_user:
         return
+    if not await check_user_joined(client, message.from_user.id):
+        await message.reply_text(
+            "⚔️ **B.A.T HACKER NETWORK** ⚔️\n\n"
+            "Bot use karne se pehle neeche diye gaye sabhi 6 channels join karein, "
+            "phir **✅ Verify** dabayein.\n\n"
+            "Join all 6 required channels and press **✅ Verify**.",
+            reply_markup=join_keyboard(), disable_web_page_preview=True
+        )
+        return
+    await message.reply_text(welcome(message.from_user.first_name or "there"),
+                             reply_markup=main_keyboard())
 
-    welcome_text = (
-        f"👋 **Welcome {message.from_user.first_name}!**\n\n"
-        f"🤖 **Black Bat Auto Post & Bulk Queue Scheduler Bot**\n\n"
-        f"📖 **Command Usages:**\n"
-        f"1️⃣ Single Schedule: `/schedule @channel YYYY-MM-DD HH:MM`\n"
-        f"2️⃣ 1-Day Gap Interval: `/interval @channel StartDate StartTime Count`\n"
-        f"3️⃣ All 6 Channels Schedule: `/multiinterval StartDate StartTime Count`\n"
-        f"4️⃣ Instant Post All Channels: `/postnow` (Reply Required)\n"
-        f"5️⃣ Bulk Queue Schedule:\n"
-        f"   `/bulk_schedule StartDate StartTime GapInDays @channel1 @channel2 ...`\n\n"
-        f"🛠️ **Other Commands:**\n"
-        f"• `/list` - Scheduled jobs dekhein.\n"
-        f"• `/cancel job_ID` - Job cancel karein.\n"
-        f"• `/reschedule job_ID YYYY-MM-DD HH:MM` - Time badlein."
-    )
-    await message.reply_text(welcome_text, reply_markup=get_main_keyboard())
 
-# Callback Query Verification Handler
-@app.on_callback_query(filters.regex("verify_joined"))
-async def verify_callback(client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    is_joined = await check_user_joined(client, user_id)
-
-    if is_joined:
-        await callback_query.answer("✅ Verification Successful! Welcome!", show_alert=True)
-        welcome_text = f"👋 **Welcome {callback_query.from_user.first_name}!**\n\n✅ Account Verified! Aap ab bot use kar sakte hain."
-        await callback_query.message.edit_text(welcome_text, reply_markup=get_main_keyboard())
+@app.on_callback_query(filters.regex(r"^verify_joined$"))
+async def verify_handler(client, query: CallbackQuery):
+    if await check_user_joined(client, query.from_user.id):
+        await query.answer("✅ Verification successful!", show_alert=True)
+        await query.message.edit_text(welcome(query.from_user.first_name or "there"),
+                                      reply_markup=main_keyboard())
     else:
-        await callback_query.answer("❌ Aapne abhi tak saare 6 channels join nahi kiye hain!", show_alert=True)
+        await query.answer("❌ Join all 6 channels first.", show_alert=True)
 
-# Clone Info Callback
-@app.on_callback_query(filters.regex("clone_info"))
-async def clone_callback(client, callback_query: CallbackQuery):
-    clone_text = (
-        "🌀 **Apna Clone Bot Kaise Banayein?**\n\n"
-        "1️⃣ `@BotFather` par jaakar `/newbot` se naya bot banayein.\n"
-        "2️⃣ BotFather se **BOT TOKEN** copy karein.\n"
-        "3️⃣ Owner (`@blackbatowner`) ko token bhej kar apna clone bot set karwayein!\n\n"
-        "🛡️ *Powered by Black Bat Auto Post Engine.*"
+
+@app.on_callback_query(filters.regex(r"^clone_info$"))
+async def clone_handler(client, query: CallbackQuery):
+    await query.answer()
+    await query.message.reply_text(
+        "🌀 **Clone bot setup**\n\n"
+        "1. Create a bot with `@BotFather` using `/newbot`.\n"
+        "2. Keep its token private.\n"
+        "3. Contact the owner for setup."
     )
-    await callback_query.answer()
-    await callback_query.message.reply_text(clone_text)
 
-# Execution Function for Sending Scheduled Post
+
 async def send_scheduled_post(target_channels, message_id):
+    channels = target_channels if isinstance(target_channels, list) else str(target_channels).split(",")
+    total = sum(bool(str(ch).strip()) for ch in channels)
+    success = 0
+    for channel in channels:
+        channel = str(channel).strip()
+        if not channel:
+            continue
+        try:
+            await app.copy_message(chat_id=channel, from_chat_id=DB_CHANNEL_ID,
+                                   message_id=int(message_id))
+            success += 1
+            print(f"Post {message_id} sent to {channel}")
+        except Exception as exc:
+            print(f"Post {message_id} failed for {channel}: {exc}")
+    print(f"Scheduled delivery: {success}/{total} successful.")
+
+
+@app.on_message(filters.command("postnow") & filters.private & filters.user(ADMIN_ID))
+async def postnow_handler(client, message):
+    if not message.reply_to_message:
+        await message.reply_text("❌ Kisi post ko reply karke `/postnow` bhejein.")
+        return
     try:
-        channels_list = target_channels.split(",")
-        for ch in channels_list:
-            ch = ch.strip()
-            if ch:
-                await app.copy_message(chat_id=ch, from_chat_id=DB_CHANNEL_ID, message_id=message_id)
-                print(f"[{datetime.now(IST)}] Post successfully uploaded to {ch}")
-    except Exception as e:
-        print(f"Error sending post: {e}")
-
-# /postnow Command - Instant Upload to All 6 Channels
-@app.on_message(filters.command("postnow") & filters.user(ADMIN_ID))
-async def post_now_handler(client, message):
-    try:
-        if not message.reply_to_message:
-            await message.reply_text("❌ **Kripya post ko REPLY karke `/postnow` command dein!**")
-            return
-
-        db_msg_id = await safe_copy_to_db(message.reply_to_message)
-        await message.reply_text("⏳ **Sabhi 6 Channels me Upload ho rha hai...**")
-
-        success_count = 0
-        for ch in REQUIRED_CHANNELS:
-            target_ch = f"@{ch}"
+        db_id = await save_post(message.reply_to_message)
+        status_msg = await message.reply_text("⏳ Sabhi channels par post bhej raha hoon...")
+        success = 0
+        for channel in REQUIRED_CHANNELS:
             try:
-                await app.copy_message(chat_id=target_ch, from_chat_id=DB_CHANNEL_ID, message_id=db_msg_id)
-                success_count += 1
-            except Exception as e:
-                print(f"Failed for {target_ch}: {e}")
+                await app.copy_message(chat_id=f"@{channel}", from_chat_id=DB_CHANNEL_ID,
+                                       message_id=db_id)
+                success += 1
+            except Exception as exc:
+                print(f"Instant post failed for @{channel}: {exc}")
+        await status_msg.edit_text(f"✅ **Instant post complete:** {success}/{len(REQUIRED_CHANNELS)} channels.")
+    except Exception as exc:
+        await message.reply_text(f"❌ Error: `{exc}`")
 
-        await message.reply_text(f"✅ **Instant Post Done!**\n📢 Total **{success_count}/6 Channels** me post upload ho gaya.")
 
-    except Exception as e:
-        await message.reply_text(f"❌ **Error:** `{str(e)}`")
-
-# /schedule Command - Single Channel Schedule
-@app.on_message(filters.command("schedule") & filters.user(ADMIN_ID))
+@app.on_message(filters.command("schedule") & filters.private & filters.user(ADMIN_ID))
 async def schedule_handler(client, message):
     try:
         if not message.reply_to_message:
-            await message.reply_text("❌ **Kripya post ko REPLY karke command dein!**")
+            await message.reply_text("❌ Post ko reply karke command bhejein.")
             return
-
-        args = message.text.split(" ")
-        if len(args) < 4:
-            await message.reply_text("❌ **Format:** `/schedule @channel_username YYYY-MM-DD HH:MM`")
+        args = (message.text or "").split()
+        if len(args) != 4:
+            await message.reply_text("Format: `/schedule @channel YYYY-MM-DD HH:MM`")
             return
-
-        target_channel = args[1]
-        date_str = args[2]
-        time_str = args[3]
-
-        full_time_str = f"{date_str} {time_str}"
-        naive_date = datetime.strptime(full_time_str, "%Y-%m-%d %H:%M")
-        run_date = IST.localize(naive_date)
-
-        db_msg_id = await safe_copy_to_db(message.reply_to_message)
-        job_id = f"job_{db_msg_id}"
-
-        scheduler.add_job(
-            send_scheduled_post,
-            'date',
-            run_date=run_date,
-            args=[target_channel, db_msg_id],
-            id=job_id,
-            replace_existing=True
-        )
-
+        channel = args[1]
+        run_date = parse_time(args[2], args[3])
+        check_future(run_date)
+        db_id = await save_post(message.reply_to_message)
+        job_id = f"job_{db_id}_{int(run_date.timestamp())}"
+        scheduler.add_job(send_scheduled_post, "date", run_date=run_date,
+                          args=[[channel], db_id], id=job_id, replace_existing=True)
         await message.reply_text(
-            f"✅ **Post Schedule Ho Gaya!**\n\n"
-            f"🆔 **Job ID:** `{job_id}`\n"
-            f"📢 **Target:** {target_channel}\n"
-            f"⏰ **Time (IST):** {full_time_str}\n"
-            f"🗄️ **DB Msg ID:** `{db_msg_id}`"
+            f"✅ **Post scheduled!**\n🆔 Job: `{job_id}`\n📢 Target: `{channel}`\n"
+            f"⏰ Time: `{fmt_time(run_date)}`\n🗄️ DB message: `{db_id}`"
         )
+    except Exception as exc:
+        await message.reply_text(f"❌ Error: `{exc}`")
 
-    except Exception as e:
-        await message.reply_text(f"❌ **Error:** `{str(e)}`")
 
-# /multiinterval Command - All 6 Channels Schedule
-@app.on_message(filters.command("multiinterval") & filters.user(ADMIN_ID))
-async def multi_interval_schedule_handler(client, message):
+@app.on_message(filters.command("interval") & filters.private & filters.user(ADMIN_ID))
+async def interval_handler(client, message):
     try:
         if not message.reply_to_message:
-            await message.reply_text("❌ **Kripya post ko REPLY karke command dein!**")
+            await message.reply_text("❌ Post ko reply karke command bhejein.")
             return
-
-        args = message.text.split(" ")
-        if len(args) < 4:
-            await message.reply_text("❌ **Format:** `/multiinterval StartDate StartTime RepeatCount`\nExample: `/multiinterval 2026-10-22 14:00 1`")
+        args = (message.text or "").split()
+        if len(args) != 6:
+            await message.reply_text("Format: `/interval @channel YYYY-MM-DD HH:MM Count GapDays`")
             return
-
-        start_date_str = args[1]
-        start_time_str = args[2]
-        repeat_count = int(args[3])
-
-        start_full_time = f"{start_date_str} {start_time_str}"
-        base_datetime = datetime.strptime(start_full_time, "%Y-%m-%d %H:%M")
-
-        db_msg_id = await safe_copy_to_db(message.reply_to_message)
-        total_scheduled = 0
-
-        for ch_index, ch in enumerate(REQUIRED_CHANNELS):
-            target_ch = f"@{ch}"
-            for i in range(repeat_count):
-                scheduled_dt = base_datetime + timedelta(days=i * 2)
-                run_date = IST.localize(scheduled_dt)
-                
-                job_id = f"job_multi_{db_msg_id}_{ch_index+1}_{i+1}"
-
-                scheduler.add_job(
-                    send_scheduled_post,
-                    'date',
-                    run_date=run_date,
-                    args=[target_ch, db_msg_id],
-                    id=job_id,
-                    replace_existing=True
-                )
-                total_scheduled += 1
-
+        channel, date_text, time_text = args[1], args[2], args[3]
+        count, gap = int(args[4]), int(args[5])
+        if not 1 <= count <= 500 or gap < 1:
+            raise ValueError("Count 1–500 aur GapDays >= 1 hona chahiye.")
+        first = parse_time(date_text, time_text)
+        check_future(first)
+        db_id = await save_post(message.reply_to_message)
+        for i in range(count):
+            run_date = first + timedelta(days=i * gap)
+            scheduler.add_job(send_scheduled_post, "date", run_date=run_date,
+                              args=[[channel], db_id],
+                              id=f"job_interval_{db_id}_{i+1}", replace_existing=True)
         await message.reply_text(
-            f"🚀 **Multi-Channel Schedule Set Ho Gaya!**\n\n"
-            f"📊 **Total Jobs Created:** {total_scheduled}\n"
-            f"⏰ **First Post Time:** `{start_full_time}`\n"
-            f"🗄️ **DB Msg ID:** `{db_msg_id}`"
+            f"✅ **Interval jobs created:** `{count}`\n📢 Target: `{channel}`\n"
+            f"🗓️ Gap: `{gap}` day(s)\n⏰ First: `{fmt_time(first)}`"
         )
+    except Exception as exc:
+        await message.reply_text(f"❌ Error: `{exc}`")
 
-    except Exception as e:
-        await message.reply_text(f"❌ **Error:** `{str(e)}`")
 
-# /bulk_schedule Command
-@app.on_message(filters.command("bulk_schedule") & filters.user(ADMIN_ID))
+@app.on_message(filters.command("multiinterval") & filters.private & filters.user(ADMIN_ID))
+async def multiinterval_handler(client, message):
+    try:
+        if not message.reply_to_message:
+            await message.reply_text("❌ Post ko reply karke command bhejein.")
+            return
+        args = (message.text or "").split()
+        if len(args) != 4:
+            await message.reply_text("Format: `/multiinterval YYYY-MM-DD HH:MM Count`")
+            return
+        first = parse_time(args[1], args[2])
+        count = int(args[3])
+        if not 1 <= count <= 500:
+            raise ValueError("Count 1–500 hona chahiye.")
+        check_future(first)
+        db_id = await save_post(message.reply_to_message)
+        jobs = 0
+        for channel_index, channel in enumerate(REQUIRED_CHANNELS, start=1):
+            for i in range(count):
+                run_date = first + timedelta(days=i * 2)
+                scheduler.add_job(send_scheduled_post, "date", run_date=run_date,
+                                  args=[[f"@{channel}"], db_id],
+                                  id=f"job_multi_{db_id}_{channel_index}_{i+1}",
+                                  replace_existing=True)
+                jobs += 1
+        await message.reply_text(
+            f"🚀 **Multi-channel schedule created!**\n📊 Jobs: `{jobs}`\n"
+            f"📢 Channels: `{len(REQUIRED_CHANNELS)}`\n⏰ First: `{fmt_time(first)}`\n"
+            f"🗓️ Repeat gap: 2 days"
+        )
+    except Exception as exc:
+        await message.reply_text(f"❌ Error: `{exc}`")
+
+
+@app.on_message(filters.command("bulk_schedule") & filters.private & filters.user(ADMIN_ID))
 async def bulk_schedule_handler(client, message):
     try:
-        args = message.text.split(" ")
+        args = (message.text or "").split()
         if len(args) < 5:
-            await message.reply_text("❌ **Format:** `/bulk_schedule StartDate StartTime GapInDays @channel1 @channel2 ...`")
+            await message.reply_text("Format: `/bulk_schedule YYYY-MM-DD HH:MM GapDays @channel1 @channel2`")
             return
-
-        start_date_str = args[1]
-        start_time_str = args[2]
-        gap_days = int(args[3])
-        target_channels = ",".join(args[4:])
-
-        start_full_time = f"{start_date_str} {start_time_str}"
-        base_datetime = datetime.strptime(start_full_time, "%Y-%m-%d %H:%M")
-
-        USER_BULK_SESSION[message.from_user.id] = {
-            "start_dt": base_datetime,
-            "gap_days": gap_days,
-            "channels": target_channels,
-            "count": 0
-        }
-
+        first = parse_time(args[1], args[2])
+        gap = int(args[3])
+        channels = args[4:]
+        if gap < 1:
+            raise ValueError("GapDays kam se kam 1 hona chahiye.")
+        check_future(first)
+        BULK[message.from_user.id] = {"start": first, "gap": gap, "channels": channels, "count": 0}
         await message.reply_text(
-            f"🚀 **Bulk Queue Collector Active!**\n\n"
-            f"📅 **Start Date:** `{start_full_time}`\n"
-            f"🗓️ **Gap:** Har `{gap_days}` Din Baad\n"
-            f"📢 **Targets:** `{target_channels}`\n\n"
-            f"👉 Posts bhejte rahein. Mode stop karne ke liye `/done_bulk` bhein."
+            f"🚀 **Bulk collector active!**\n📅 Start: `{fmt_time(first)}`\n"
+            f"🗓️ Gap: `{gap}` day(s)\n📢 Targets: `{', '.join(channels)}`\n"
+            "Ab posts ek-ek karke bhejein. Finish: `/done_bulk`"
         )
+    except Exception as exc:
+        await message.reply_text(f"❌ Error: `{exc}`")
 
-    except Exception as e:
-        await message.reply_text(f"❌ **Error:** `{str(e)}`")
 
-# Bulk Message Collector Listener
-@app.on_message(filters.private & filters.user(ADMIN_ID) & ~filters.command(["start", "schedule", "interval", "multiinterval", "bulk_schedule", "done_bulk", "list", "cancel", "reschedule", "postnow"]))
-async def bulk_collector_listener(client, message):
-    user_id = message.from_user.id
-    if user_id in USER_BULK_SESSION:
-        session = USER_BULK_SESSION[user_id]
-        
-        post_index = session["count"]
-        scheduled_dt = session["start_dt"] + timedelta(days=post_index * session["gap_days"])
-        run_date = IST.localize(scheduled_dt)
+COMMANDS = ["start", "schedule", "interval", "multiinterval", "bulk_schedule",
+            "done_bulk", "list", "cancel", "reschedule", "postnow"]
 
-        db_msg_id = await safe_copy_to_db(message)
-        job_id = f"job_queue_{db_msg_id}"
 
-        scheduler.add_job(
-            send_scheduled_post,
-            'date',
-            run_date=run_date,
-            args=[session["channels"], db_msg_id],
-            id=job_id,
-            replace_existing=True
-        )
-
+@app.on_message(filters.private & filters.user(ADMIN_ID) & ~filters.command(COMMANDS))
+async def bulk_collector_handler(client, message):
+    user_id = message.from_user.id if message.from_user else None
+    if user_id not in BULK:
+        return
+    try:
+        session = BULK[user_id]
+        run_date = session["start"] + timedelta(days=session["count"] * session["gap"])
+        check_future(run_date)
+        db_id = await save_post(message)
+        job_id = f"job_queue_{db_id}_{int(run_date.timestamp())}"
+        scheduler.add_job(send_scheduled_post, "date", run_date=run_date,
+                          args=[session["channels"], db_id], id=job_id, replace_existing=True)
         session["count"] += 1
         await message.reply_text(
-            f"✅ **Post #{session['count']} Queue Me Set Ho Gaya!**\n"
-            f"⏰ **Scheduled Time:** `{scheduled_dt.strftime('%Y-%m-%d %H:%M')}`\n"
-            f"🆔 **Job ID:** `{job_id}`\n\n"
-            f"*(Agle posts bhejte rahein, ya finish karne ke liye `/done_bulk` likhein)*"
+            f"✅ **Post #{session['count']} queued!**\n⏰ `{fmt_time(run_date)}`\n"
+            f"🆔 Job: `{job_id}`\nSend next post or `/done_bulk`."
         )
+    except Exception as exc:
+        await message.reply_text(f"❌ Queue error: `{exc}`")
 
-# /done_bulk Command
-@app.on_message(filters.command("done_bulk") & filters.user(ADMIN_ID))
+
+@app.on_message(filters.command("done_bulk") & filters.private & filters.user(ADMIN_ID))
 async def done_bulk_handler(client, message):
-    user_id = message.from_user.id
-    if user_id in USER_BULK_SESSION:
-        total = USER_BULK_SESSION[user_id]["count"]
-        del USER_BULK_SESSION[user_id]
-        await message.reply_text(f"🎉 **Bulk Collector Off!** Total **{total} Naye Posts** successfully schedule ho gaye!")
+    session = BULK.pop(message.from_user.id, None)
+    if session is None:
+        await message.reply_text("ℹ️ Koi active bulk session nahi hai.")
     else:
-        await message.reply_text("ℹ️ Koi active bulk session nahi mila.")
+        await message.reply_text(f"🎉 Bulk collector stopped. Queued posts: **{session['count']}**.")
 
-# /list Command
-@app.on_message(filters.command("list") & filters.user(ADMIN_ID))
-async def list_jobs(client, message):
-    jobs = scheduler.get_jobs()
+
+@app.on_message(filters.command("list") & filters.private & filters.user(ADMIN_ID))
+async def list_handler(client, message):
+    jobs = sorted(scheduler.get_jobs(), key=lambda j: j.next_run_time or datetime.max.replace(tzinfo=IST))
     if not jobs:
-        await message.reply_text("ℹ️ Abhi koi bhi post schedule me nahi hai.")
+        await message.reply_text("ℹ️ Koi scheduled post nahi hai.")
         return
+    lines = [f"📋 **Scheduled Posts: {len(jobs)}**\n"]
+    for job in jobs[:20]:
+        target = job.args[0] if job.args else "Unknown"
+        lines.append(f"🔹 **Job:** `{job.id}`\n📢 Target: `{target}`\n⏰ `{fmt_time(job.next_run_time)}`\n")
+    if len(jobs) > 20:
+        lines.append(f"Showing first 20 of {len(jobs)} jobs.")
+    await message.reply_text("\n".join(lines))
 
-    text = f"📋 **Scheduled Posts List ({len(jobs)} Total Jobs):**\n\n"
-    for job in jobs[:10]:
-        target = job.args[0]
-        time_str = job.next_run_time.strftime("%Y-%m-%d %H:%M:%S")
-        text += f"🔹 **Job ID:** `{job.id}`\n📢 **Target:** {target}\n⏰ **Time:** {time_str}\n\n"
 
-    if len(jobs) > 10:
-        text += f"*(Total {len(jobs)} jobs set hain)*"
-
-    await message.reply_text(text)
-
-# /cancel Command
-@app.on_message(filters.command("cancel") & filters.user(ADMIN_ID))
-async def cancel_job(client, message):
+@app.on_message(filters.command("cancel") & filters.private & filters.user(ADMIN_ID))
+async def cancel_handler(client, message):
+    args = (message.text or "").split()
+    if len(args) != 2:
+        await message.reply_text("Format: `/cancel job_ID`")
+        return
     try:
-        args = message.text.split(" ")
-        if len(args) < 2:
-            await message.reply_text("❌ **Format:** `/cancel job_ID`")
+        scheduler.remove_job(args[1])
+        await message.reply_text(f"🗑️ Job cancelled: `{args[1]}`")
+    except Exception:
+        await message.reply_text("❌ Job ID nahi mili ya job pehle hi complete ho chuki hai.")
+
+
+@app.on_message(filters.command("reschedule") & filters.private & filters.user(ADMIN_ID))
+async def reschedule_handler(client, message):
+    try:
+        args = (message.text or "").split()
+        if len(args) != 4:
+            await message.reply_text("Format: `/reschedule job_ID YYYY-MM-DD HH:MM`")
             return
-
-        job_id = args[1]
-        job = scheduler.get_job(job_id)
-
-        if job:
-            scheduler.remove_job(job_id)
-            await message.reply_text(f"🗑️ Post cancel ho gaya! 🆔 `{job_id}`")
-        else:
+        job = scheduler.get_job(args[1])
+        if not job:
             await message.reply_text("❌ Job ID nahi mili.")
+            return
+        run_date = parse_time(args[2], args[3])
+        check_future(run_date)
+        scheduler.modify_job(args[1], next_run_time=run_date)
+        await message.reply_text(f"✅ Rescheduled `{args[1]}` to `{fmt_time(run_date)}`")
+    except Exception as exc:
+        await message.reply_text(f"❌ Error: `{exc}`")
 
-    except Exception as e:
-        await message.reply_text(f"❌ **Error:** `{str(e)}`")
 
-# Main Startup Function
 async def main():
     scheduler.start()
-    await app.start()
-    
     try:
-        await app.get_chat(DB_CHANNEL_ID)
-        print("DB Channel successfully initialized!")
-    except Exception as e:
-        print(f"Warning: Could not fetch DB Channel directly: {e}")
+        await app.start()
+        try:
+            await app.get_chat(DB_CHANNEL_ID)
+            print("Database channel is accessible.")
+        except Exception as exc:
+            print(f"WARNING: Cannot access DB channel {DB_CHANNEL_ID}: {exc}")
+        print("Bot started successfully.")
+        await asyncio.Event().wait()
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+        if app.is_connected:
+            await app.stop()
 
-    print("Bot is running successfully with all features...")
-    await asyncio.Event().wait()
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if not loop.is_closed():
+            loop.close()
