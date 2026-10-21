@@ -109,7 +109,7 @@ async def start_handler(client, message):
             "🇮🇳 **HINGLISH:**\n"
             "⚠️ **Access Denied!** Bot ko start karne ke liye pehle niche diye gaye **sabhi 6 channels ko join karna compulsory hai.** Join karne ke baad **'✅ Verify'** button par click karein.\n\n"
             "🇮🇳 **HINDI:**\n"
-            "⚠️ **एक्सेस अस्वीकृत!** बोट को शुरू करने के लिए नीचे दिए गए **सभी 6 चैनलों को ज्वाइन करना अनिवार्य है।** ज्वाइन करने के बाद **'✅ Verify'** बटन पर क्लिक करें।\n\n"
+            "⚠️ **एक्सेस अस्वीकृत!** बोट को शुरू करने के लिए नीचे दिए गए **सभी 6 चैनलों को ज्वाइन करना अनिवार्य है।** ज्वाइन करने के बाद **'✅ Verify'** बटन पर क्लिक करें。\n\n"
             "🇬🇧 **ENGLISH:**\n"
             "⚠️ **Access Denied!** To start using this bot, you must **join all 6 channels listed below.** After joining, click on the **'✅ Verify'** button.\n"
             "───────────────"
